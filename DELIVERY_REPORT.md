@@ -402,7 +402,7 @@ vue-tsc@^1.8.0
 
 ## 📝 许可证
 
-MIT License
+GNU Affero General Public License v3.0 (AGPL-3.0)
 
 ---
 

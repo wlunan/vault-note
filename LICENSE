@@ -1,0 +1,43 @@
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
+Copyright (C) 2026 VaultNote Contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+---
+
+ADDITIONAL TERMS per Section 13 of the AGPLv3:
+
+If you modify this Program, or any covered work, by linking or combining it
+with other code, not covered under this License, the licensors of this Program
+grant you the additional permission to convey the resulting work.
+
+---
+
+中文版本说明 (Chinese Summary):
+
+本软件采用 GNU Affero General Public License v3.0 (AGPL-3.0) 许可证。
+
+主要条款：
+1. 自由使用、修改和分发
+2. 必须保留版权声明
+3. 如果将修改后的代码作为网络服务部署，必须向用户提供源代码副本或链接
+4. 任何衍生版本必须采用相同的 AGPL-3.0 许可证
+
+完整的英文许可证文本请访问：
+https://www.gnu.org/licenses/agpl-3.0.html
+
+中文版本参考：
+https://www.gnu.org/licenses/agpl-3.0.zh-hans.html

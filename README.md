@@ -198,7 +198,15 @@ npm run build
 
 ## 📄 许可证
 
-MIT
+GNU Affero General Public License v3.0
+
+本项目采用 AGPL-3.0 许可证。这意味着：
+- 你可以自由使用、修改和分发本项目
+- 必须保留原作者信息
+- 如果你修改代码并部署为网络服务，必须公开源代码
+- 任何基于本项目的衍生版本必须采用相同的 AGPL-3.0 许可证
+
+详见 [LICENSE](./LICENSE) 文件。
 
 ## 🤝 贡献
 

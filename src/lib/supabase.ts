@@ -26,9 +26,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
  */
 export interface NoteRecord {
   id: string;
-  encrypted_content: string;
+  encrypted_tabs: string;
   encrypted_auth: string;
   updated_at: string;
+  created_at?: string;
 }
 
 /**
@@ -62,13 +63,13 @@ export async function fetchNote(noteId: string): Promise<NoteRecord | null> {
 /**
  * 保存或更新笔记到 Supabase
  * @param noteId - SHA-256(noteName) 的十六进制字符串
- * @param encryptedContent - Base64 编码的加密内容
+ * @param encryptedTabs - Base64 编码的加密标签页集合
  * @param encryptedAuth - Base64 编码的加密认证字符串
  * @returns 保存的笔记记录
  */
 export async function saveNote(
   noteId: string,
-  encryptedContent: string,
+  encryptedTabs: string,
   encryptedAuth: string
 ): Promise<NoteRecord> {
   try {
@@ -77,7 +78,7 @@ export async function saveNote(
       .upsert(
         {
           id: noteId,
-          encrypted_content: encryptedContent,
+          encrypted_tabs: encryptedTabs,
           encrypted_auth: encryptedAuth,
           updated_at: new Date().toISOString(),
         },

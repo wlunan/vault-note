@@ -51,7 +51,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
  */
 export async function hashNoteName(noteName: string): Promise<string> {
   const data = stringToUint8Array(noteName);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -68,7 +68,7 @@ export async function deriveKey(noteName: string, password: string): Promise<Cry
   const data = stringToUint8Array(combined);
   
   // 使用 SHA-256 派生密钥
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data.buffer as ArrayBuffer);
   
   // 导入为 AES-GCM 密钥（256-bit）
   const key = await crypto.subtle.importKey(
@@ -112,7 +112,7 @@ export async function encryptNote(
   const encryptedContentBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    contentData
+    new Uint8Array(contentData.buffer.slice(0)) as BufferSource
   );
   const encryptedContentArray = new Uint8Array(encryptedContentBuffer);
   
@@ -127,7 +127,7 @@ export async function encryptNote(
   const encryptedAuthBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: authIv },
     key,
-    authData
+    new Uint8Array(authData.buffer.slice(0)) as BufferSource
   );
   const encryptedAuthArray = new Uint8Array(encryptedAuthBuffer);
   
@@ -229,3 +229,192 @@ export async function decryptNote(
     };
   }
 }
+
+/**
+ * 标签页数据接口
+ */
+export interface NoteTab {
+  id: string;              // 标签页唯一 ID
+  title: string;           // 标签页标题（从内容第一行提取）
+  content: string;         // 标签页内容
+  createdAt: number;       // 创建时间戳
+  updatedAt: number;       // 更新时间戳
+}
+
+/**
+ * 标签页集合接口
+ */
+export interface NoteTabsCollection {
+  tabs: NoteTab[];
+  activeTabId: string;     // 当前活跃标签页 ID
+}
+
+const MAX_TABS_PER_NOTE = 8;           // 每个笔记最多 8 个标签页
+const MAX_CHARS_PER_TAB = 50000;       // 每个标签页最多 5 万字符
+const TITLE_LENGTH = 30;               // 标签页标题长度（从内容第一行提取）
+
+/**
+ * 从内容第一行提取标题
+ * @param content - 笔记内容
+ * @returns 标题（最多 30 字符）
+ */
+export function extractTitleFromContent(content: string): string {
+  const firstLine = content.split('\n')[0].trim();
+  if (!firstLine) {
+    return "未命名标签页";
+  }
+  return firstLine.length > TITLE_LENGTH
+    ? firstLine.substring(0, TITLE_LENGTH) + "..."
+    : firstLine;
+}
+
+/**
+ * 创建新标签页
+ * @param content - 标签页内容
+ * @returns 新标签页对象
+ */
+export function createNoteTab(content: string = ""): NoteTab {
+  const now = Date.now();
+  return {
+    id: `tab_${now}_${Math.random().toString(36).substr(2, 9)}`,
+    title: extractTitleFromContent(content),
+    content,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * 加密标签页集合
+ * @param noteName - 笔记名称
+ * @param password - 访问密码
+ * @param collection - 标签页集合
+ * @returns 加密结果
+ */
+export async function encryptTabsCollection(
+  noteName: string,
+  password: string,
+  collection: NoteTabsCollection
+): Promise<EncryptionResult> {
+  const key = await deriveKey(noteName, password);
+  
+  // 生成随机 IV
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  // 加密标签页集合
+  const collectionJson = JSON.stringify(collection);
+  const collectionData = stringToUint8Array(collectionJson);
+  const encryptedCollectionBuffer = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    collectionData.buffer as ArrayBuffer
+  );
+  const encryptedCollectionArray = new Uint8Array(encryptedCollectionBuffer);
+  
+  // 合并 IV + 加密数据
+  const collectionWithIv = new Uint8Array(iv.length + encryptedCollectionArray.length);
+  collectionWithIv.set(iv);
+  collectionWithIv.set(encryptedCollectionArray, iv.length);
+  
+  // 加密认证字符串
+  const authIv = crypto.getRandomValues(new Uint8Array(12));
+  const authData = stringToUint8Array(AUTH_STRING);
+  const encryptedAuthBuffer = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: authIv },
+    key,
+    authData.buffer as ArrayBuffer
+  );
+  const encryptedAuthArray = new Uint8Array(encryptedAuthBuffer);
+  
+  // 合并 IV + 加密数据
+  const authWithIv = new Uint8Array(authIv.length + encryptedAuthArray.length);
+  authWithIv.set(authIv);
+  authWithIv.set(encryptedAuthArray, authIv.length);
+  
+  return {
+    encryptedContent: uint8ArrayToBase64(collectionWithIv),
+    encryptedAuth: uint8ArrayToBase64(authWithIv),
+  };
+}
+
+/**
+ * 解密标签页集合
+ * @param noteName - 笔记名称
+ * @param password - 访问密码
+ * @param encryptedTabs - 加密的标签页集合
+ * @returns 解密结果
+ */
+export async function decryptTabsCollection(
+  noteName: string,
+  password: string,
+  encryptedTabs: string
+): Promise<{ success: boolean; collection?: NoteTabsCollection; error?: string }> {
+  try {
+    const key = await deriveKey(noteName, password);
+    const encryptedArray = base64ToUint8Array(encryptedTabs);
+    
+    // 提取 IV 和加密数据
+    const iv = encryptedArray.slice(0, 12);
+    const encryptedData = encryptedArray.slice(12);
+    
+    // 解密
+    const decryptedBuffer = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      key,
+      encryptedData
+    );
+    
+    const collectionJson = uint8ArrayToString(new Uint8Array(decryptedBuffer));
+    const collection = JSON.parse(collectionJson) as NoteTabsCollection;
+    
+    return {
+      success: true,
+      collection,
+    };
+  } catch (error) {
+    console.error("解密标签页集合时出错:", error);
+    return {
+      success: false,
+      error: "解密失败，请检查密码",
+    };
+  }
+}
+
+/**
+ * 验证标签页集合是否有效
+ * @param collection - 标签页集合
+ * @returns 验证结果和错误消息
+ */
+export function validateTabsCollection(collection: NoteTabsCollection): {
+  valid: boolean;
+  error?: string;
+} {
+  // 检查标签页数量
+  if (collection.tabs.length > MAX_TABS_PER_NOTE) {
+    return {
+      valid: false,
+      error: `最多只能有 ${MAX_TABS_PER_NOTE} 个标签页`,
+    };
+  }
+  
+  // 检查每个标签页的字符数
+  for (const tab of collection.tabs) {
+    if (tab.content.length > MAX_CHARS_PER_TAB) {
+      return {
+        valid: false,
+        error: `标签页 "${tab.title}" 超过 ${MAX_CHARS_PER_TAB} 字符限制`,
+      };
+    }
+  }
+  
+  // 检查活跃标签页是否存在
+  if (!collection.tabs.find(tab => tab.id === collection.activeTabId)) {
+    return {
+      valid: false,
+      error: "活跃标签页不存在",
+    };
+  }
+  
+  return { valid: true };
+}
+

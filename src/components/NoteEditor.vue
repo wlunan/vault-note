@@ -49,23 +49,79 @@
       <div class="editor-header">
         <h2>{{ noteName }}</h2>
         <div class="header-right">
-          <span v-if="lastSaved" class="status-text">
-            {{ lastSaved }}
+          <span class="status-text">
+            <template v-if="isSaving">保存中...</template>
+            <template v-else-if="lastSaved">{{ lastSaved }}</template>
+            <template v-else>自动保存已启用</template>
           </span>
           <button @click="handleLogout" class="btn btn-logout">退出</button>
         </div>
       </div>
 
-      <textarea
-        v-model="content"
-        placeholder="开始输入笔记内容..."
-        class="textarea"
-      ></textarea>
+      <!-- 标签页导航 -->
+      <div class="tabs-container">
+        <div class="tabs-list">
+          <button
+            v-for="tab in collection.tabs"
+            :key="tab.id"
+            :class="['tab-button', { active: collection.activeTabId === tab.id }]"
+            @click="selectTab(tab.id)"
+          >
+            <span class="tab-title">{{ tab.title }}</span>
+            <button
+              v-if="collection.tabs.length > 1"
+              class="tab-close"
+              @click.stop="deleteTab(tab.id)"
+            >
+              ×
+            </button>
+          </button>
+        </div>
 
-      <div class="editor-footer">
-        <span v-if="isSaving" class="saving-text">保存中...</span>
-        <span v-else class="auto-save-text">自动保存已启用</span>
+        <!-- 添加新标签页 -->
+        <button
+          v-if="collection.tabs.length < 8"
+          @click="addNewTab"
+          class="btn-add-tab"
+          title="添加新标签页"
+        >
+          +
+        </button>
       </div>
+
+      <!-- 当前标签页统计信息 -->
+      <div class="tab-stats">
+        <span class="stat-item">
+          行数: <strong>{{ currentTabStats.lines }}</strong>
+        </span>
+        <span class="stat-item">
+          字数: <strong>{{ currentTabStats.chars }}</strong>
+          <span v-if="currentTabStats.chars > 40000" class="warning">
+            (接近限制)
+          </span>
+          <span v-if="currentTabStats.chars >= 50000" class="error">
+            (已达限制)
+          </span>
+        </span>
+      </div>
+
+
+      <!-- 文本编辑框 -->
+      <div class="textarea-wrapper">
+        <textarea
+          v-model="currentTabContent"
+          placeholder="开始输入笔记内容..."
+          class="textarea"
+          :disabled="currentTabStats.chars >= 50000"
+        ></textarea>
+      </div>
+
+      <!-- 固定底部信息区 -->
+      <div class="editor-footer">
+        <!-- 可放置版权、版本等信息，暂留空 -->
+      </div>
+
+
     </div>
   </div>
 </template>
@@ -74,9 +130,14 @@
 import { ref, computed, watch, onMounted } from "vue";
 import {
   hashNoteName,
-  encryptNote,
-  decryptNote,
+  encryptTabsCollection,
+  decryptTabsCollection,
   verifyPassword,
+  createNoteTab,
+  extractTitleFromContent,
+  validateTabsCollection,
+  type NoteTabsCollection,
+  type NoteTab,
 } from "../utils/crypto";
 import { fetchNote, saveNote } from "../lib/supabase";
 
@@ -86,15 +147,49 @@ const formNoteName = ref("");
 const formPassword = ref("");
 const noteName = ref("");
 const password = ref("");
-const content = ref("");
+const collection = ref<NoteTabsCollection>({
+  tabs: [],
+  activeTabId: "",
+});
 const errorMessage = ref("");
 const isLoading = ref(false);
 const isSaving = ref(false);
 const lastSaved = ref<string | null>(null);
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+let hideSavedTimeout: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * 处理登录/创建笔记
+ * 获取当前选中标签页
+ */
+const currentTab = computed(() => {
+  return collection.value.tabs.find((tab) => tab.id === collection.value.activeTabId);
+});
+
+/**
+ * 获取当前标签页内容
+ */
+const currentTabContent = computed({
+  get: () => currentTab.value?.content || "",
+  set: (value: string) => {
+    if (currentTab.value) {
+      currentTab.value.content = value;
+      currentTab.value.updatedAt = Date.now();
+    }
+  },
+});
+
+/**
+ * 计算当前标签页统计信息
+ */
+const currentTabStats = computed(() => {
+  const content = currentTabContent.value;
+  const lines = content ? content.split("\n").length : 0;
+  const chars = content.length;
+  return { lines, chars };
+});
+
+/**
+ * 处理登录/打开笔记
  */
 const handleLogin = async (): Promise<void> => {
   errorMessage.value = "";
@@ -129,23 +224,27 @@ const handleLogin = async (): Promise<void> => {
         return;
       }
 
-      // 解密内容
-      const decrypted = await decryptNote(
+      // 解密标签页集合
+      const decrypted = await decryptTabsCollection(
         formNoteName.value,
         formPassword.value,
-        existingNote.encrypted_content
+        existingNote.encrypted_tabs
       );
 
-      if (!decrypted.success) {
+      if (!decrypted.success || !decrypted.collection) {
         errorMessage.value = "无法访问该笔记（密码错误或不存在）";
         isLoading.value = false;
         return;
       }
 
-      content.value = decrypted.content || "";
+      collection.value = decrypted.collection;
     } else {
-      // 新笔记
-      content.value = "";
+      // 创建新笔记（包含一个默认标签页）
+      const newTab = createNoteTab("");
+      collection.value = {
+        tabs: [newTab],
+        activeTabId: newTab.id,
+      };
     }
 
     // 设置已认证状态
@@ -169,7 +268,7 @@ const handleLogout = (): void => {
   formPassword.value = "";
   noteName.value = "";
   password.value = "";
-  content.value = "";
+  collection.value = { tabs: [], activeTabId: "" };
   errorMessage.value = "";
   lastSaved.value = null;
   if (saveTimeout) {
@@ -178,10 +277,63 @@ const handleLogout = (): void => {
 };
 
 /**
- * 自动保存内容
+ * 选择标签页
+ */
+const selectTab = (tabId: string): void => {
+  collection.value.activeTabId = tabId;
+};
+
+/**
+ * 添加新标签页
+ */
+const addNewTab = (): void => {
+  if (collection.value.tabs.length >= 8) {
+    errorMessage.value = "最多只能有 8 个标签页";
+    return;
+  }
+  const newTab = createNoteTab("");
+  collection.value.tabs.push(newTab);
+  collection.value.activeTabId = newTab.id;
+};
+
+/**
+ * 删除标签页
+ */
+const deleteTab = (tabId: string): void => {
+  if (collection.value.tabs.length <= 1) {
+    errorMessage.value = "至少需要保留一个标签页";
+    return;
+  }
+
+  const index = collection.value.tabs.findIndex((tab) => tab.id === tabId);
+  if (index > -1) {
+    collection.value.tabs.splice(index, 1);
+
+    // 如果删除的是当前标签页，选择其他标签页
+    if (collection.value.activeTabId === tabId) {
+      collection.value.activeTabId =
+        collection.value.tabs[Math.max(0, index - 1)].id;
+    }
+  }
+};
+
+/**
+ * 自动保存标签页集合
  */
 const autoSave = async (): Promise<void> => {
   if (!authenticated.value) {
+    return;
+  }
+
+  // 更新标签页标题
+  for (const tab of collection.value.tabs) {
+    tab.title = extractTitleFromContent(tab.content);
+  }
+
+  // 验证数据
+  const validation = validateTabsCollection(collection.value);
+  if (!validation.valid) {
+    lastSaved.value = validation.error || "保存失败";
     return;
   }
 
@@ -195,10 +347,10 @@ const autoSave = async (): Promise<void> => {
     try {
       isSaving.value = true;
       const noteId = await hashNoteName(noteName.value);
-      const encrypted = await encryptNote(
+      const encrypted = await encryptTabsCollection(
         noteName.value,
         password.value,
-        content.value
+        collection.value
       );
 
       await saveNote(noteId, encrypted.encryptedContent, encrypted.encryptedAuth);
@@ -211,9 +363,13 @@ const autoSave = async (): Promise<void> => {
       });
       lastSaved.value = `已保存 ${timeStr}`;
 
-      // 3 秒后隐藏保存提示
-      setTimeout(() => {
+      // 3 秒后隐藏保存提示，先清除旧的
+      if (hideSavedTimeout) {
+        clearTimeout(hideSavedTimeout);
+      }
+      hideSavedTimeout = setTimeout(() => {
         lastSaved.value = null;
+        hideSavedTimeout = null;
       }, 3000);
     } catch (error) {
       console.error("保存失败:", error);
@@ -225,11 +381,15 @@ const autoSave = async (): Promise<void> => {
 };
 
 /**
- * 监听内容变化，触发自动保存
+ * 监听标签页内容变化，触发自动保存
  */
-watch(content, () => {
-  autoSave();
-});
+watch(
+  () => collection.value,
+  () => {
+    autoSave();
+  },
+  { deep: true }
+);
 
 /**
  * 清理保存超时
@@ -238,6 +398,9 @@ onMounted(() => {
   window.addEventListener("beforeunload", () => {
     if (saveTimeout) {
       clearTimeout(saveTimeout);
+    }
+    if (hideSavedTimeout) {
+      clearTimeout(hideSavedTimeout);
     }
   });
 });
@@ -372,6 +535,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 16px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .status-text {
@@ -390,8 +555,118 @@ onMounted(() => {
   background: #e0e0e0;
 }
 
-.textarea {
+/* 标签页容器 */
+.tabs-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f9f9f9;
+  overflow-x: auto;
+}
+
+.tabs-list {
+  display: flex;
+  gap: 4px;
   flex: 1;
+}
+
+.tab-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 13px;
+  color: #666;
+  max-width: 150px;
+}
+
+.tab-button:hover {
+  border-color: #667eea;
+  background: #f5f7ff;
+}
+
+.tab-button.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-color: #667eea;
+}
+
+.tab-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.tab-button.active .tab-close:hover {
+  opacity: 0.7;
+}
+
+.btn-add-tab {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 16px;
+  color: #667eea;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.btn-add-tab:hover {
+  background: #f5f7ff;
+  border-color: #667eea;
+}
+
+/* 标签页统计信息 */
+.tab-stats {
+  display: flex;
+  gap: 24px;
+  padding: 12px 20px;
+  background: #f9f9f9;
+  font-size: 13px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.stat-item {
+  color: #666;
+}
+
+.stat-item strong {
+  color: #333;
+  font-weight: 600;
+}
+
+.warning {
+  color: #ff9800;
+}
+
+.textarea-wrapper {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.textarea {
+  flex: 1 1 auto;
   border: none;
   padding: 20px;
   font-size: 14px;
@@ -399,29 +674,38 @@ onMounted(() => {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
   resize: none;
   color: #333;
+  min-height: 180px;
+  max-height: calc(100vh - 320px);
+  box-sizing: border-box;
 }
-
 .textarea:focus {
   outline: none;
 }
-
+.textarea:disabled {
+  background: #f5f5f5;
+  color: #ccc;
+  cursor: not-allowed;
+}
 .editor-footer {
-  padding: 12px 20px;
-  border-top: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  height: 48px;
+  min-height: 48px;
   background: #f9f9f9;
+  border-top: 1px solid #e0e0e0;
   color: #999;
-  font-size: 12px;
-  text-align: right;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.5px;
 }
 
-.saving-text {
-  color: #667eea;
-  font-weight: 500;
+.textarea:disabled {
+  background: #f5f5f5;
+  color: #ccc;
+  cursor: not-allowed;
 }
 
-.auto-save-text {
-  color: #999;
-}
 
 /* 响应式设计 */
 @media (max-width: 600px) {
@@ -441,6 +725,24 @@ onMounted(() => {
   .header-right {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .tabs-container {
+    padding: 8px 12px;
+  }
+
+  .tab-button {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .btn-add-tab {
+    padding: 6px 10px;
+  }
+
+  .tab-stats {
+    gap: 16px;
+    padding: 10px 16px;
   }
 }
 </style>

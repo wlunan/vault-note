@@ -305,7 +305,7 @@ await testPerformance()     // 性能基准
 
 ## 📝 许可证
 
-MIT License
+GNU Affero General Public License v3.0 (AGPL-3.0)
 
 ---
 

@@ -1,10 +1,10 @@
 -- VaultNote 数据库迁移脚本
--- 创建 notes 表并配置 RLS
+-- 创建 notes 和 note_tabs 表并配置 RLS
 
--- 创建 notes 表
+-- 创建 notes 主笔记集合表
 CREATE TABLE IF NOT EXISTS notes (
   id TEXT PRIMARY KEY,
-  encrypted_content TEXT NOT NULL,
+  encrypted_tabs TEXT NOT NULL,  -- 加密的标签页数组 (JSON)
   encrypted_auth TEXT NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
